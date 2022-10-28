@@ -1,0 +1,94 @@
+include "ffmatlib.idp"
+
+real ra = 0.02;
+real ha = 0.005;
+int  na = 10;
+real alphaa = 0.2;
+
+real rb = 0.01;
+real hb = 0.005;
+int  nb = 12;
+real alphab = 0.4;
+real phase = pi/15;
+
+real La = 2*pi*alphaa*ra + 2*pi*(1 - alphaa)*(ra + ha) + 2*na*ha;
+real Lb = 2*pi*alphab*rb + 2*pi*(1 - alphab)*(rb - hb) + 2*nb*hb;
+
+real la = La/na;
+real la1 = 2*pi*alphaa*ra/na;
+real la2 = la1 + ha;
+real la3 = la2 + 2*pi*(1 - alphaa)*(ra + ha)/na;
+real lb = Lb/nb;
+real lb1 = 2*pi*alphab*rb/nb;
+real lb2 = lb1 + hb;
+real lb3 = lb2 + 2*pi*(1 - alphab)*(rb - hb)/nb;
+
+border C1(t = 0, La) {
+	int nn = t/la;
+	real t0 = t - nn*la;
+	// cout << "nn = " << nn << " ";
+	// cout << "t0 = " << t0 << endl;
+	if (t0 < la1 && t0 >= 0  ) { x = ra*cos(2*pi/na*(alphaa*t0/la1 + nn)); y = ra*sin(2*pi/na*(alphaa*t0/la1 + nn)); }
+	if (t0 < la2 && t0 >= la1) { x = (ra + t0 - la1)*cos(2*pi/na*(alphaa + nn)); y = (ra + t0 - la1)*sin(2*pi/na*(alphaa + nn)); }
+	if (t0 < la3 && t0 >= la2) { x = (ra + ha)*cos(2*pi/na*(alphaa + (1 - alphaa)*(t0 - la2)/(la3 - la2) + nn)); y = (ra + ha)*sin(2*pi/na*(alphaa + (1 - alphaa)*(t0 - la2)/(la3 - la2) + nn)); }
+	if (t0 < la  && t0 >= la3) { x = (ra + ha - t0 + la3)*cos(2*pi/na*(nn + 1)); y = (ra + ha - t0 + la3)*sin(2*pi/na*(nn + 1)); }
+};
+
+border C2(t = Lb, 0) {
+	int nn = t/lb;
+	real t0 = t - nn*lb;
+	// cout << "nn = " << nn << " ";
+	// cout << "t0 = " << t0 << endl;
+	if (t0 < lb1 && t0 >= 0  ) { x = rb*cos(2*pi/nb*(alphab*t0/lb1 + nn) + phase); y = rb*sin(2*pi/nb*(alphab*t0/lb1 + nn) + phase); }
+	if (t0 < lb2 && t0 >= lb1) { x = (rb + t0 - lb1)*cos(2*pi/nb*(alphab + nn) + phase); y = (rb + t0 - lb1)*sin(2*pi/nb*(alphab + nn) + phase); }
+	if (t0 < lb3 && t0 >= lb2) { x = (rb + hb)*cos(2*pi/nb*(alphab + (1 - alphab)*(t0 - lb2)/(lb3 - lb2) + nn) + phase); y = (rb + hb)*sin(2*pi/nb*(alphab + (1 - alphab)*(t0 - lb2)/(lb3 - lb2) + nn) + phase); }
+	if (t0 < lb  && t0 >= lb3) { x = (rb + hb - t0 + lb3)*cos(2*pi/nb*(nn + 1) + phase); y = (rb + hb - t0 + lb3)*sin(2*pi/nb*(nn + 1) + phase); }
+};
+
+plot (C1(500), C2(500));
+mesh Th = buildmesh(C1(500)+C2(500));
+plot (Th);
+fespace Vh(Th, P2);
+Vh u,v;
+func f = 0;
+real cpu=clock();
+solve Poisson(u, v, solver = LU) =
+	int2d(Th) (dx(u)*dx(v) + dy(u)*dy(v))
+	- int2d(Th) (f*v)
+	+ on (C2, u = 0)
+	+ on (C1, u = 1);
+cout << "CPU time = " << clock() - cpu << endl;
+//real [int] viso=[0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1,1.1];
+//plot(u, wait=true, value=true, fill=true, ps="uCG.eps",viso=viso);
+// Parameters
+real sigma = 20; //value of the shift
+
+// Problem
+// OP = A - sigma B ; // The shifted matrix
+varf op(u, v) = int2d(Th)( dx(u)*dx(v) + dy(u)*dy(v) - sigma*u*v) + on (C2, u = 0);
+varf b([u], [v]) = int2d(Th)( u*v );
+
+matrix OP = op(Vh, Vh, solver=Crout, factorize=1);
+matrix B = b(Vh, Vh, solver=CG, eps=1e-20);
+
+int nev=2; // Number of requested eigenvalues near sigma
+
+real[int] ev(nev); // To store the nev eigenvalue
+Vh[int] eV(nev); // To store the nev eigenvector
+
+int k=EigenValue(OP, B, sym=true, sigma=sigma, value=ev, vector=eV,
+tol=1e-10, maxit=0, ncv=0);
+
+for (int i = 0; i<nev; i++) {
+    cout << i << " eigen value = " << ev(i) << endl;
+    string filename = "eigen" + i + ".eps";
+    plot(eV[i], wait=false, ps=filename);
+}
+
+savemesh(Th, "magnetron_mesh.msh");
+ffSaveVh(Th, Vh, "magnetron_vh.txt");
+ffSaveData(eV[nev - 1], "magnetron_Ez.txt");
+Vh dxEz, dyEz;
+dxEz = -dx(eV[nev - 1]);
+dyEz = -dy(eV[nev - 1]);
+ffSaveData2(dxEz, dyEz, "magnetron_nablaEz.txt");
